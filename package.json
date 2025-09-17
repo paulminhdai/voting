@@ -1,0 +1,15 @@
+{
+  "name": "vote-automation",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Direct API voting script for EasyPolls",
+  "main": "api_vote_direct.mjs",
+  "scripts": {
+    "vote": "node api_vote_direct.mjs",
+    "vote-puppeteer": "node automate_vote_10x.mjs"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "puppeteer": "^21.5.0"
+  }
+}
