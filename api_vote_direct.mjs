@@ -15,24 +15,39 @@ const userAgents = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0'
 ];
 
-// Function to get voting session data (key and choice mapping)
-async function getVotingSession(userAgent) {
+// Function to get voting session data with fresh incognito-like session
+async function getVotingSession(userAgent, attemptNumber) {
   try {
-    console.log('🔍 Fetching voting session data...');
+    console.log(`🔍 Creating fresh session ${attemptNumber} (mimicking incognito mode)...`);
+    
+    // Create completely fresh headers for each attempt (like incognito)
+    const freshHeaders = {
+      'User-Agent': userAgent,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Sec-Ch-Ua': '"Chromium";v="120", "Not-A?Brand";v="24", "Google Chrome";v="120"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"macOS"',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1',
+      'Connection': 'keep-alive',
+      // Force no cookies (fresh incognito session)
+      'Cookie': ''
+    };
+    
+    console.log('🌐 Fetching poll page with fresh headers (no cookies)...');
     
     const response = await fetch(POLL_PAGE_URL, {
       method: 'GET',
-      headers: {
-        'User-Agent': userAgent,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none'
-      }
+      headers: freshHeaders,
+      // Disable any automatic cookie handling
+      credentials: 'omit'
     });
 
     if (!response.ok) {
@@ -41,33 +56,73 @@ async function getVotingSession(userAgent) {
 
     const html = await response.text();
     
-    // Extract the voting key from the HTML (it's usually in a script tag or data attribute)
-    // Look for patterns like: key:"otk8vybr" or data-key="otk8vybr"
-    const keyMatch = html.match(/key["\s]*:["\s]*["']([^"']+)["']/i) || 
-                     html.match(/data-key["\s]*=["\s]*["']([^"']+)["']/i) ||
-                     html.match(/"key"["\s]*:["\s]*["']([^"']+)["']/i);
+    // Extract the voting key from the HTML
+    console.log('🔑 Extracting fresh voting key...');
+    const keyPatterns = [
+      { name: 'key:', pattern: /key["\s]*:["\s]*["']([^"']+)["']/i },
+      { name: '"key":', pattern: /"key"["\s]*:["\s]*["']([^"']+)["']/i },
+      { name: 'data-key=', pattern: /data-key["\s]*=["\s]*["']([^"']+)["']/i },
+      { name: 'window.key', pattern: /window\.key["\s]*=["\s]*["']([^"']+)["']/i },
+      { name: 'var key', pattern: /var\s+key["\s]*=["\s]*["']([^"']+)["']/i },
+      { name: 'let key', pattern: /let\s+key["\s]*=["\s]*["']([^"']+)["']/i },
+      { name: 'const key', pattern: /const\s+key["\s]*=["\s]*["']([^"']+)["']/i }
+    ];
     
-    if (!keyMatch) {
-      console.log('⚠️ Could not find voting key in HTML, using fallback');
-      // Try to extract from any script containing key pattern
-      const scriptMatch = html.match(/<script[^>]*>.*?key.*?["']([a-zA-Z0-9]+)["'].*?<\/script>/is);
-      if (scriptMatch) {
-        return { key: scriptMatch[1], cookies: response.headers.get('set-cookie') };
+    let key = null;
+    for (const { name, pattern } of keyPatterns) {
+      const match = html.match(pattern);
+      if (match) {
+        key = match[1];
+        console.log(`✅ Found key using pattern '${name}': ${key}`);
+        break;
+      } else {
+        console.log(`❌ No match for pattern '${name}'`);
       }
-      return { key: null, cookies: response.headers.get('set-cookie') };
+    }
+    
+    if (!key) {
+      console.log('⚠️ Could not find voting key in HTML, extracting from scripts...');
+      // More aggressive extraction from script tags
+      const scripts = html.match(/<script[^>]*>(.*?)<\/script>/gis) || [];
+      for (const script of scripts) {
+        const keyMatch = script.match(/["']([a-zA-Z0-9]{8,})["']/g);
+        if (keyMatch) {
+          // Find the most likely key (8+ alphanumeric characters)
+          const candidates = keyMatch.map(m => m.replace(/['"]/g, ''))
+                                    .filter(k => k.length >= 8 && /^[a-zA-Z0-9]+$/.test(k));
+          if (candidates.length > 0) {
+            key = candidates[0]; // Take the first candidate
+            console.log(`🔍 Extracted potential key from script: ${key}`);
+            break;
+          }
+        }
+      }
     }
 
-    const key = keyMatch[1];
-    console.log(`✅ Found voting key: ${key}`);
+    if (key) {
+      console.log(`✅ Found fresh voting key: ${key}`);
+    } else {
+      console.log('⚠️ No voting key found, will use fallback');
+    }
     
-    // Extract cookies from response
-    const cookies = response.headers.get('set-cookie');
+    // Get fresh cookies from this session
+    const setCookieHeader = response.headers.get('set-cookie');
+    const freshCookies = setCookieHeader ? setCookieHeader.split(',').map(c => c.split(';')[0]).join('; ') : '';
     
-    return { key, cookies };
+    if (freshCookies) {
+      console.log(`🍪 Fresh session cookies obtained: ${freshCookies.substring(0, 50)}...`);
+    }
+    
+    return { 
+      key: key || null, 
+      cookies: freshCookies,
+      userAgent: userAgent,
+      sessionId: `session_${attemptNumber}_${Date.now()}`
+    };
     
   } catch (error) {
-    console.error('❌ Error fetching session:', error.message);
-    return { key: null, cookies: null };
+    console.error('❌ Error creating fresh session:', error.message);
+    return { key: null, cookies: null, userAgent: userAgent };
   }
 }
 
@@ -95,8 +150,8 @@ function findChoiceId(html) {
   return 3; // Fallback based on your network data
 }
 
-// Function to submit vote
-async function submitVote(key, choiceId, userAgent, cookies) {
+// Function to submit vote with fresh incognito-like session
+async function submitVote(key, choiceId, sessionData) {
   try {
     const payload = {
       choices: [choiceId],
@@ -104,15 +159,19 @@ async function submitVote(key, choiceId, userAgent, cookies) {
       key: key
     };
 
-    console.log(`📤 Submitting vote with payload:`, payload);
+    console.log(`📤 Submitting vote with fresh session payload:`, payload);
+    console.log(`🔐 Session ID: ${sessionData.sessionId}`);
 
-    const headers = {
+    // Create fresh headers for each vote (like opening new incognito window)
+    const freshVoteHeaders = {
       'Accept': 'application/json, text/plain, */*',
-      'Accept-Encoding': 'gzip, deflate, br, zstd',
+      'Accept-Encoding': 'gzip, deflate, br',
       'Accept-Language': 'en-US,en;q=0.9',
+      'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
       'Content-Type': 'application/json',
       'Origin': 'https://vote.easypolls.net',
+      'Pragma': 'no-cache',
       'Referer': POLL_PAGE_URL,
       'Sec-Ch-Ua': '"Chromium";v="120", "Not-A?Brand";v="24", "Google Chrome";v="120"',
       'Sec-Ch-Ua-Mobile': '?0',
@@ -120,18 +179,23 @@ async function submitVote(key, choiceId, userAgent, cookies) {
       'Sec-Fetch-Dest': 'empty',
       'Sec-Fetch-Mode': 'cors',
       'Sec-Fetch-Site': 'same-origin',
-      'User-Agent': userAgent
+      'User-Agent': sessionData.userAgent
     };
 
-    // Add cookies if available
-    if (cookies) {
-      headers['Cookie'] = cookies;
+    // Only use cookies from this fresh session (like incognito)
+    if (sessionData.cookies && sessionData.cookies.trim()) {
+      freshVoteHeaders['Cookie'] = sessionData.cookies;
+      console.log(`🍪 Using fresh session cookies: ${sessionData.cookies.substring(0, 50)}...`);
+    } else {
+      console.log(`🚫 No cookies (fresh incognito-like session)`);
     }
 
     const response = await fetch(API_URL, {
       method: 'POST',
-      headers: headers,
-      body: JSON.stringify(payload)
+      headers: freshVoteHeaders,
+      body: JSON.stringify(payload),
+      // Ensure no persistent connection/session data
+      credentials: 'include' // Use cookies only from this specific session
     });
 
     const responseText = await response.text();
@@ -171,29 +235,29 @@ const randomDelay = (min, max) => {
   return Math.floor(Math.random() * (max - min + 1) + min) * 1000;
 };
 
-// Main voting function
+// Main voting function - mimics opening fresh incognito window each time
 async function performVote(attemptNumber) {
-  console.log(`\n=== Vote Attempt ${attemptNumber} ===`);
+  console.log(`\n=== Vote Attempt ${attemptNumber} (Fresh Incognito Session) ===`);
   
   const userAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
   console.log(`🌐 Using User Agent: ${userAgent.substring(0, 60)}...`);
   
-  // Get session data
-  const session = await getVotingSession(userAgent);
+  // Create completely fresh session (like opening new incognito window)
+  const sessionData = await getVotingSession(userAgent, attemptNumber);
   
-  if (!session.key) {
-    console.log('❌ Failed to get voting key, trying with fallback');
-    // Try with a known key pattern or generate one
-    session.key = 'otk8vybr'; // Fallback from your network data
+  if (!sessionData.key) {
+    console.log('❌ Failed to get voting key - this will likely cause vote rejection');
+    console.log('🚨 CRITICAL: No voting key found. Vote will probably fail.');
+    return false; // Don't attempt vote without proper key
   }
   
-  // Add delay to simulate human behavior
-  const delay = randomDelay(1, 3);
-  console.log(`⏳ Waiting ${delay/1000} seconds before voting...`);
+  // Add delay to simulate human behavior (like manually opening incognito)
+  const delay = randomDelay(2, 5);
+  console.log(`⏳ Waiting ${delay/1000} seconds before voting (simulating human behavior)...`);
   await new Promise(resolve => setTimeout(resolve, delay));
   
-  // Submit vote (using choice ID 3 for SBD25 based on your network data)
-  const result = await submitVote(session.key, 3, userAgent, session.cookies);
+  // Submit vote using the fresh session data (using choice ID 3 for SBD25)
+  const result = await submitVote(sessionData.key, 3, sessionData);
   
   if (result.success) {
     console.log('🎉 Vote submitted and registered successfully!');
@@ -206,6 +270,7 @@ async function performVote(attemptNumber) {
   } else {
     if (result.error.includes('no revoteDate')) {
       console.log('⚠️ Vote was sent but NOT registered (likely blocked/duplicate)');
+      console.log('💡 This suggests the voting system detected this as a duplicate vote');
     } else {
       console.log('❌ Vote failed:', result.error);
     }
@@ -213,6 +278,9 @@ async function performVote(attemptNumber) {
     if (result.body) console.log('📄 Response body:', result.body);
     return false;
   }
+  
+  // Clean up session (like closing incognito window)
+  console.log(`🗑️ Cleaning up session ${sessionData.sessionId}`);
 }
 
 // Main execution
@@ -232,10 +300,11 @@ async function main() {
         successfulVotes++;
       }
       
-      // Random delay between votes (5-15 seconds)
+      // Random delay between fresh incognito sessions (10-30 seconds)
       if (i < totalAttempts) {
-        const delay = randomDelay(5, 15);
-        console.log(`⏳ Waiting ${delay/1000} seconds before next attempt...`);
+        const delay = randomDelay(10, 30);
+        console.log(`⏳ Waiting ${delay/1000} seconds before opening next fresh incognito session...`);
+        console.log(`💭 (Simulating: close incognito → wait → open new incognito → vote)`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
       
